@@ -187,6 +187,8 @@ class Service implements ServiceInterface
 
         if($response->failed())
         {
+            dd($response, $response->json());
+
             if($response->unauthorized() OR $response->forbidden()) {
                 throw new \Exception("[VirtFusion] This action is unauthorized! Confirm that API token has the right permissions");
             }
@@ -211,10 +213,11 @@ class Service implements ServiceInterface
     {
         $order = $this->order;
         $user = $order->user;
+        $package = $order->package;
         
         // check if external user exists
         if(!$order->hasExternalUser()) {
-            // try {
+            try {
                 $externalUser = Service::api('post', '/users', [
                     "name" => $user->first_name . ' ' . $user->last_name,
                     'email' => $user->email,
@@ -238,13 +241,27 @@ class Service implements ServiceInterface
                         'url' => settings('virtfusion::host'),
                     ]
                 ]);
-
-            // } catch (\Exception $e) {
-            //     throw new \Exception("Failed to create user on the panel, please make sure the email isn't already in use or that your name is longer than 10 chars");
-            // }
+            } catch (\Exception $e) {
+                throw new \Exception("Failed to create user on the panel, please make sure the email isn't already in use or that your name is longer than 10 chars");
+            }
         }
 
-        return [];
+        // create the server
+        $response = Service::api('post', '/servers', [
+            "packageId" => $package->data('package'),
+            "userId" => $order->getExternalUser()->external_id,
+            "hypervisorId" => $package->data('hypervisor_group_id'),
+            "ipv4" => $package->data('allowed_ips', 1),
+            "storage" => $package->data('storage', 20),
+            "memory" => $package->data('memory', 1024),
+            "cpuCores" => $package->data('cpu_cores', 5),
+        ]);
+
+        $order->external_id = $response['data']['id'];
+        $order->data = $response['data'];
+        $order->save();
+
+        return $response;
     }
 
     /**
@@ -255,10 +272,10 @@ class Service implements ServiceInterface
      * Optional
      * @return void
     */
-    public function upgrade(Package $oldPackage, Package $newPackage)
-    {
-        return [];
-    }
+    // public function upgrade(Package $oldPackage, Package $newPackage)
+    // {
+    //     return [];
+    // }
 
     /**
      * This function is responsible for suspending an instance of the
@@ -269,7 +286,8 @@ class Service implements ServiceInterface
     */
     public function suspend(array $data = [])
     {
-        return [];
+        $order = $this->order;
+        Service::api('post', '/servers/' . $order->external_id . '/suspend');
     }
 
     /**
@@ -281,7 +299,8 @@ class Service implements ServiceInterface
     */
     public function unsuspend(array $data = [])
     {
-        return [];
+        $order = $this->order;
+        Service::api('post', '/servers/' . $order->external_id . '/unsuspend');
     }
 
     /**
@@ -292,7 +311,8 @@ class Service implements ServiceInterface
     */
     public function terminate(array $data = [])
     {
-        return [];
+        $order = $this->order;
+        Service::api('delete', '/servers/' . $order->external_id . '?delay=5');
     }
 
 }
