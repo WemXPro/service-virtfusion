@@ -187,7 +187,7 @@ class Service implements ServiceInterface
 
         if($response->failed())
         {
-            dd($response, $response->json());
+            // dd($response, $response->json());
 
             if($response->unauthorized() OR $response->forbidden()) {
                 throw new \Exception("[VirtFusion] This action is unauthorized! Confirm that API token has the right permissions");
