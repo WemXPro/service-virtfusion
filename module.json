@@ -1,0 +1,11 @@
+{
+    "name": "Virtfusion",
+    "alias": "virtfusion",
+    "description": "",
+    "keywords": [],
+    "priority": 0,
+    "providers": [
+        "App\\Services\\Virtfusion\\Providers\\VirtfusionServiceProvider"
+    ],
+    "files": []
+}

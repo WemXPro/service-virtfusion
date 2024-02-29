@@ -1,0 +1,25 @@
+{
+    "name": "wemx/service-virtfusion",
+    "type": "laravel-module",
+    "description": "A virtfusion service for developers",
+    "authors": [
+        {
+            "name": "WemX",
+            "email": "mubeen@wemx.net"
+        }
+    ],
+    "extra": {
+        "module-dir": "app/Services",
+        "laravel": {
+            "providers": [],
+            "aliases": {
+
+            }
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\Services\\Virtfusion\\": ""
+        }
+    }
+}
