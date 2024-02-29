@@ -2,6 +2,7 @@
 
 namespace App\Services\Virtfusion;
 
+use Illuminate\Support\Facades\Http;
 use App\Services\ServiceInterface;
 use App\Models\Package;
 use App\Models\Order;
@@ -30,7 +31,7 @@ class Service implements ServiceInterface
     {
         return (object)
         [
-          'display_name' => 'Virtfusion',
+          'display_name' => 'VirtFusion',
           'author' => 'WemX',
           'version' => '1.0.0',
           'wemx_version' => ['dev', '>=1.8.0'],
@@ -47,7 +48,29 @@ class Service implements ServiceInterface
      */
     public static function setConfig(): array
     {
-        return [];
+        // Check if the URL ends with a slash
+        $doesNotEndWithSlash = function ($attribute, $value, $fail) {
+            if (preg_match('/\/$/', $value)) {
+                return $fail('AMP Panel URL must not end with a slash "/". It should be like https://panel.example.com');
+            }
+        };
+
+        return [
+            [
+                "key" => "virtfusion::host",
+                "name" => "Host",
+                "description" => "The host / url of the VirtFusion Panel i.e https://panel.example.com",
+                "type" => "url",
+                "rules" => ['required', 'active_url', $doesNotEndWithSlash], // laravel validation rules
+            ],
+            [
+                "key" => "encrypted::virtfusion::api_key",
+                "name" => "API Key",
+                "description" => "The API Key of the VirtFusion Panel",
+                "type" => "password",
+                "rules" => ['required'], // laravel validation rules
+            ],
+        ];
     }
 
     /**
@@ -60,7 +83,68 @@ class Service implements ServiceInterface
      */
     public static function setPackageConfig(Package $package): array
     {
-        return [];
+        // collect the data then map with keus
+        $collectPackages = collect(Service::api('get', '/packages')['data']);
+        $packages = $collectPackages->mapWithKeys(function ($item) {
+            if(!$item['enabled']) {
+                return [];
+            }
+
+            return [$item['id'] => $item['name']];
+        });
+
+        return [
+            [
+                "col" => "col-12",
+                "key" => "package",
+                "name" => "Package",
+                "description" => "Select the package to use for this service",
+                "type" => "select",
+                "options" => $packages->toArray(),
+                "save_on_change" => true,
+                "rules" => ['required'],
+            ],
+            [
+                "col" => "col-12",
+                "key" => "hypervisor_group_id",
+                "name" => "Hyporvisor Group ID",
+                "description" => "Enter the Hyporvisor Group ID to use for this service",
+                "type" => "number",
+                "save_on_change" => true,
+                "rules" => ['required', 'numeric'],
+            ],
+            [
+                "key" => "allowed_ips",
+                "name" => "Number of Allowed ipv4 IPs",
+                "description" => "Enter the number of allowed ipv4 IPs for this service",
+                "type" => "number",
+                "rules" => ['required', 'numeric'],
+            ],
+            [
+                "key" => "storage",
+                "name" => "Storage Limit (GB)",
+                "description" => "Enter the storage limit for this service in GB",
+                "default_value" => 20,
+                "type" => "number",
+                "rules" => ['required', 'numeric'],
+            ],
+            [
+                "key" => "memory",
+                "name" => "Memory Limit (MB)",
+                "description" => "Enter the memory limit for this service in MB",
+                "default_value" => 1024,
+                "type" => "number",
+                "rules" => ['required', 'numeric'],
+            ],
+            [
+                "key" => "cpu_cores",
+                "name" => "CPU Cores",
+                "description" => "Enter the number of CPU Cores for this service",
+                "default_value" => 5,
+                "type" => "number",
+                "rules" => ['required', 'numeric'],
+            ],
+        ];
     }
 
     /**
@@ -87,6 +171,37 @@ class Service implements ServiceInterface
     }
 
     /**
+     * Init connection with API
+    */
+    public static function api($method, $endpoint, $data = [])
+    {
+        // make the request
+        $url = settings('virtfusion::host') . '/api/v1' . $endpoint;
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . settings('encrypted::virtfusion::api_key'),
+            'Accept' => 'application/json',
+            'Content-Type' => 'application/json',
+        ])->$method($url, $data);
+
+        // dd($response, $response->json());
+
+        if($response->failed())
+        {
+            if($response->unauthorized() OR $response->forbidden()) {
+                throw new \Exception("[VirtFusion] This action is unauthorized! Confirm that API token has the right permissions");
+            }
+
+            if($response->serverError()) {
+                throw new \Exception("[VirtFusion] Internal Server Error: {$response->status()}");
+            }
+
+            throw new \Exception("[VirtFusion] Failed to connect to the API. Ensure the API details and hostname are valid.");
+        }
+
+        return $response;
+    }
+
+    /**
      * This function is responsible for creating an instance of the
      * service. This can be anything such as a server, vps or any other instance.
      * 
@@ -94,6 +209,41 @@ class Service implements ServiceInterface
      */
     public function create(array $data = [])
     {
+        $order = $this->order;
+        $user = $order->user;
+        
+        // check if external user exists
+        if(!$order->hasExternalUser()) {
+            // try {
+                $externalUser = Service::api('post', '/users', [
+                    "name" => $user->first_name . ' ' . $user->last_name,
+                    'email' => $user->email,
+                    'extRelationId' => $user->id,
+                    'sendMail' => true,
+                ])['data'];
+
+                $order->createExternalUser([
+                    'external_id' => $externalUser['id'], // optional
+                    'username' => $user->email,
+                    'password' => $externalUser['password'],
+                    'data' => $externalUser, // Additional data about the user as an array (optional)
+                 ]);
+
+                //  Email the user their password
+                $user->email([
+                    'subject' => 'Panel Account Created',
+                    'content' => "Your account has been created on the vps panel. You can login using the following details: <br><br> Email: {$user->email} <br> Password: {$externalUser['password']}",
+                    'button' => [
+                        'name' => 'VPS Panel',
+                        'url' => settings('virtfusion::host'),
+                    ]
+                ]);
+
+            // } catch (\Exception $e) {
+            //     throw new \Exception("Failed to create user on the panel, please make sure the email isn't already in use or that your name is longer than 10 chars");
+            // }
+        }
+
         return [];
     }
 
