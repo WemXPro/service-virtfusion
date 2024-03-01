@@ -302,8 +302,6 @@ class Service implements ServiceInterface
         } catch (\Exception $e) {
             return redirect()->back()->withError("Something went wrong, please try again later.");
         }
-
-        return redirect()->back()->withSuccess("Successfully logged in to the panel");    
     }
 
     /**
