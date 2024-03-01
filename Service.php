@@ -107,7 +107,7 @@ class Service implements ServiceInterface
             [
                 "col" => "col-12",
                 "key" => "hypervisor_group_id",
-                "name" => "Hyporvisor Group ID",
+                "name" => "Hypervisor Group ID",
                 "description" => "Enter the Hyporvisor Group ID to use for this service",
                 "type" => "number",
                 "save_on_change" => true,
