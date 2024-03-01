@@ -171,6 +171,23 @@ class Service implements ServiceInterface
     }
 
     /**
+     * Test API connection
+    */
+    public static function testConnection()
+    {
+        try {
+            // try to get list of packages through API request
+            $response = Service::api('get', '/connect');
+        } catch(\Exception $error) {
+            // if try-catch fails, return the error with details
+            return redirect()->back()->withError("Failed to connect to VirtFusion. <br><br>{$error->getMessage()}");
+        }
+
+        // if no errors are logged, return a success message
+        return redirect()->back()->withSuccess("Successfully connected with VirtFusion");
+    }
+
+    /**
      * Init connection with API
     */
     public static function api($method, $endpoint, $data = [])
@@ -188,6 +205,13 @@ class Service implements ServiceInterface
         if($response->failed())
         {
             // dd($response, $response->json());
+            if(isset($response['errors'])) {
+                throw new \Exception("[VirtFusion] " . json_encode($response['errors']));
+            }
+
+            if(isset($response['message'])) {
+                throw new \Exception("[VirtFusion] " . $response['message']);
+            }
 
             if($response->unauthorized() OR $response->forbidden()) {
                 throw new \Exception("[VirtFusion] This action is unauthorized! Confirm that API token has the right permissions");
@@ -262,6 +286,24 @@ class Service implements ServiceInterface
         $order->save();
 
         return $response;
+    }
+
+    /**
+     * This function is responsible automatically logging in to the
+     * panel when the user clicks the login button in the client area.
+     * 
+     * @return redirect
+    */
+    public function loginToPanel(Order $order)
+    {
+        try {
+            $response = Service::api('post', "/users/{$order->user->id}/serverAuthenticationTokens/{$order->external_id}");
+            return redirect(settings('virtfusion::host') . $response['data']['authentication']['endpoint_complete']);
+        } catch (\Exception $e) {
+            return redirect()->back()->withError("Something went wrong, please try again later.");
+        }
+
+        return redirect()->back()->withSuccess("Successfully logged in to the panel");    
     }
 
     /**
