@@ -120,30 +120,6 @@ class Service implements ServiceInterface
                 "type" => "number",
                 "rules" => ['required', 'numeric'],
             ],
-            [
-                "key" => "storage",
-                "name" => "Storage Limit (GB)",
-                "description" => "Enter the storage limit for this service in GB",
-                "default_value" => 20,
-                "type" => "number",
-                "rules" => ['required', 'numeric'],
-            ],
-            [
-                "key" => "memory",
-                "name" => "Memory Limit (MB)",
-                "description" => "Enter the memory limit for this service in MB",
-                "default_value" => 1024,
-                "type" => "number",
-                "rules" => ['required', 'numeric'],
-            ],
-            [
-                "key" => "cpu_cores",
-                "name" => "CPU Cores",
-                "description" => "Enter the number of CPU Cores for this service",
-                "default_value" => 5,
-                "type" => "number",
-                "rules" => ['required', 'numeric'],
-            ],
         ];
     }
 
@@ -161,13 +137,129 @@ class Service implements ServiceInterface
     }
 
     /**
-     * Define buttons shown at order management page
-     *
-     * @return array
+     * This function is responsible for creating an instance of the
+     * service. This can be anything such as a server, vps or any other instance.
+     * 
+     * @return void
      */
-    public static function setServiceButtons(Order $order): array
+    public function create(array $data = [])
     {
-        return [];    
+        $order = $this->order;
+        $user = $order->user;
+        $package = $order->package;
+        
+        // check if external user exists
+        if(!$order->hasExternalUser()) {
+            try {
+                $externalUser = Service::api('post', '/users', [
+                    "name" => $user->first_name . ' ' . $user->last_name,
+                    'email' => $user->email,
+                    'extRelationId' => $user->id,
+                    'sendMail' => false, // set to true if you want virtfusion to send the credentials alongside wemx via email
+                ])['data'];
+
+                $order->createExternalUser([
+                    'external_id' => $externalUser['id'], // optional
+                    'username' => $user->email,
+                    'password' => $externalUser['password'],
+                    'data' => $externalUser, // Additional data about the user as an array (optional)
+                 ]);
+
+                //  Email the user their password
+                $user->email([
+                    'subject' => 'Panel Account Created',
+                    'content' => "Your account has been created on the vps panel. You can login using the following details: <br><br> Email: {$user->email} <br> Password: {$externalUser['password']}",
+                    'button' => [
+                        'name' => 'VPS Panel',
+                        'url' => settings('virtfusion::host'),
+                    ]
+                ]);
+            } catch (\Exception $e) {
+                throw new \Exception("Failed to create user on the panel, please make sure the email isn't already in use or that your name is longer than 10 chars");
+            }
+        }
+
+        // create the server
+        $response = Service::api('post', '/servers', [
+            "packageId" => $package->data('package'),
+            "userId" => $order->getExternalUser()->external_id,
+            "hypervisorId" => $package->data('hypervisor_group_id'),
+            "ipv4" => $package->data('allowed_ips', 1),
+        ]);
+
+        $order->external_id = $response['data']['id'];
+        $order->data = $response['data'];
+        $order->save();
+
+        return $response;
+    }
+
+    /**
+     * This function is responsible for upgrading or downgrading
+     * an instance of this service. This method is optional
+     * If your service doesn't support upgrading, remove this method.
+     * 
+     * Optional
+     * @return void
+    */
+    public function upgrade(Package $oldPackage, Package $newPackage)
+    {
+        $order = $this->order;
+        Service::api('put', "/servers/{$order->external_id}/package/{$newPackage->data('package')}");
+    }
+
+    /**
+     * This function is responsible for suspending an instance of the
+     * service. This method is called when a order is expired or
+     * suspended by an admin
+     * 
+     * @return void
+    */
+    public function suspend(array $data = [])
+    {
+        $order = $this->order;
+        Service::api('post', "/servers/{$order->external_id}/suspend");
+    }
+
+    /**
+     * This function is responsible for unsuspending an instance of the
+     * service. This method is called when a order is activated or
+     * unsuspended by an admin
+     * 
+     * @return void
+    */
+    public function unsuspend(array $data = [])
+    {
+        $order = $this->order;
+        Service::api('post', "/servers/{$order->external_id}/unsuspend");
+    }
+
+    /**
+     * This function is responsible for deleting an instance of the
+     * service. This can be anything such as a server, vps or any other instance.
+     * 
+     * @return void
+    */
+    public function terminate(array $data = [])
+    {
+        $order = $this->order;
+        Service::api('delete', "/servers/{$order->external_id}?delay=5");
+    }
+
+    /**
+     * This function is responsible automatically logging in to the
+     * panel when the user clicks the login button in the client area.
+     * 
+     * @return redirect
+    */
+    public function loginToPanel(Order $order)
+    {
+        try {
+            $response = Service::api('post', "/users/{$order->user->id}/serverAuthenticationTokens/{$order->external_id}");
+            return redirect(settings('virtfusion::host') . $response['data']['authentication']['endpoint_complete']);
+        } catch (\Exception $e) {
+            return redirect()->back()->withError("Something went wrong, please try again later.");
+        }
     }
 
     /**
@@ -192,6 +284,11 @@ class Service implements ServiceInterface
     */
     public static function api($method, $endpoint, $data = [])
     {
+        // validate the method
+        if(!in_array($method, ['get', 'post', 'put', 'delete', 'patch', 'head'])) {
+            throw new \Exception("[VirtFusion] Invalid method: {$method}");
+        }
+
         // make the request
         $url = settings('virtfusion::host') . '/api/v1' . $endpoint;
         $response = Http::withHeaders([
@@ -226,133 +323,4 @@ class Service implements ServiceInterface
 
         return $response;
     }
-
-    /**
-     * This function is responsible for creating an instance of the
-     * service. This can be anything such as a server, vps or any other instance.
-     * 
-     * @return void
-     */
-    public function create(array $data = [])
-    {
-        $order = $this->order;
-        $user = $order->user;
-        $package = $order->package;
-        
-        // check if external user exists
-        if(!$order->hasExternalUser()) {
-            try {
-                $externalUser = Service::api('post', '/users', [
-                    "name" => $user->first_name . ' ' . $user->last_name,
-                    'email' => $user->email,
-                    'extRelationId' => $user->id,
-                    'sendMail' => true,
-                ])['data'];
-
-                $order->createExternalUser([
-                    'external_id' => $externalUser['id'], // optional
-                    'username' => $user->email,
-                    'password' => $externalUser['password'],
-                    'data' => $externalUser, // Additional data about the user as an array (optional)
-                 ]);
-
-                //  Email the user their password
-                $user->email([
-                    'subject' => 'Panel Account Created',
-                    'content' => "Your account has been created on the vps panel. You can login using the following details: <br><br> Email: {$user->email} <br> Password: {$externalUser['password']}",
-                    'button' => [
-                        'name' => 'VPS Panel',
-                        'url' => settings('virtfusion::host'),
-                    ]
-                ]);
-            } catch (\Exception $e) {
-                throw new \Exception("Failed to create user on the panel, please make sure the email isn't already in use or that your name is longer than 10 chars");
-            }
-        }
-
-        // create the server
-        $response = Service::api('post', '/servers', [
-            "packageId" => $package->data('package'),
-            "userId" => $order->getExternalUser()->external_id,
-            "hypervisorId" => $package->data('hypervisor_group_id'),
-            "ipv4" => $package->data('allowed_ips', 1),
-            "storage" => $package->data('storage', 20),
-            "memory" => $package->data('memory', 1024),
-            "cpuCores" => $package->data('cpu_cores', 5),
-        ]);
-
-        $order->external_id = $response['data']['id'];
-        $order->data = $response['data'];
-        $order->save();
-
-        return $response;
-    }
-
-    /**
-     * This function is responsible automatically logging in to the
-     * panel when the user clicks the login button in the client area.
-     * 
-     * @return redirect
-    */
-    public function loginToPanel(Order $order)
-    {
-        try {
-            $response = Service::api('post', "/users/{$order->user->id}/serverAuthenticationTokens/{$order->external_id}");
-            return redirect(settings('virtfusion::host') . $response['data']['authentication']['endpoint_complete']);
-        } catch (\Exception $e) {
-            return redirect()->back()->withError("Something went wrong, please try again later.");
-        }
-    }
-
-    /**
-     * This function is responsible for upgrading or downgrading
-     * an instance of this service. This method is optional
-     * If your service doesn't support upgrading, remove this method.
-     * 
-     * Optional
-     * @return void
-    */
-    // public function upgrade(Package $oldPackage, Package $newPackage)
-    // {
-    //     return [];
-    // }
-
-    /**
-     * This function is responsible for suspending an instance of the
-     * service. This method is called when a order is expired or
-     * suspended by an admin
-     * 
-     * @return void
-    */
-    public function suspend(array $data = [])
-    {
-        $order = $this->order;
-        Service::api('post', '/servers/' . $order->external_id . '/suspend');
-    }
-
-    /**
-     * This function is responsible for unsuspending an instance of the
-     * service. This method is called when a order is activated or
-     * unsuspended by an admin
-     * 
-     * @return void
-    */
-    public function unsuspend(array $data = [])
-    {
-        $order = $this->order;
-        Service::api('post', '/servers/' . $order->external_id . '/unsuspend');
-    }
-
-    /**
-     * This function is responsible for deleting an instance of the
-     * service. This can be anything such as a server, vps or any other instance.
-     * 
-     * @return void
-    */
-    public function terminate(array $data = [])
-    {
-        $order = $this->order;
-        Service::api('delete', '/servers/' . $order->external_id . '?delay=5');
-    }
-
 }
